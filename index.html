@@ -190,6 +190,7 @@ body{font-family:'Noto Sans KR',sans-serif;background:var(--bg);color:var(--tx);
 .hbtn{font-size:12px;font-weight:500;color:var(--tx2);background:none;border:1px solid var(--bdr);padding:4px 10px;border-radius:3px;cursor:pointer;transition:all .13s;white-space:nowrap;flex-shrink:0;}
 .hbtn:hover{color:var(--ac);border-color:var(--ac);background:var(--acd);}
 .hbtn.g{color:#44dd77;border-color:#1a7744;}.hbtn.g:hover{color:#88ffaa;border-color:#33cc66;background:rgba(30,150,70,.12);}
+.cap-bg-opt.active{color:var(--ac);border-color:var(--ac);background:var(--acd);}
 .hbtn.r{color:#ff7766;border-color:#882222;}.hbtn.r:hover{color:#ffaa99;border-color:#cc3333;background:rgba(150,30,30,.12);}
 kbd{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:9.5px;padding:1px 5px;border-radius:3px;border:1px solid var(--bdr);background:var(--panel);color:var(--tx2);vertical-align:middle;white-space:nowrap;}
 .mtab{font-family:'Rajdhani',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--txd);background:none;border:1px solid var(--bdr);padding:4px 9px;border-radius:3px;cursor:pointer;transition:all .13s;white-space:nowrap;}
@@ -946,7 +947,16 @@ body.color-soft .nid{opacity:.72;}
 
 <div class="ov" id="m-cap" style="display:none" onmousedown="bgc(event,'m-cap')">
   <div class="md" style="width:600px;max-height:82vh"><div class="mdt">📷 캡처 미리보기</div>
-  <div class="mdb" style="text-align:center;overflow:auto"><canvas id="cap-cv" style="max-width:100%;border:1px solid var(--bdr);border-radius:3px;display:block;margin:0 auto"></canvas></div>
+  <div class="mdb" style="text-align:center;overflow:auto">
+    <div id="cap-bg-bar" style="display:flex;gap:6px;justify-content:center;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+      <span style="font-size:11px;color:var(--tx2);letter-spacing:1px;">배경</span>
+      <button type="button" class="hbtn cap-bg-opt" data-bg="auto"        onclick="setCaptureBg('auto')">자동</button>
+      <button type="button" class="hbtn cap-bg-opt" data-bg="white"       onclick="setCaptureBg('white')">흰색</button>
+      <button type="button" class="hbtn cap-bg-opt" data-bg="black"       onclick="setCaptureBg('black')">검정</button>
+      <button type="button" class="hbtn cap-bg-opt" data-bg="transparent" onclick="setCaptureBg('transparent')">투명</button>
+    </div>
+    <canvas id="cap-cv" style="max-width:100%;border:1px solid var(--bdr);border-radius:3px;display:block;margin:0 auto;background-image:linear-gradient(45deg,#888 25%,transparent 25%),linear-gradient(-45deg,#888 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#888 75%),linear-gradient(-45deg,transparent 75%,#888 75%);background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0;"></canvas>
+  </div>
   <div class="mdf"><button class="hbtn g" id="cap-png-btn" onclick="dlCap('png')">PNG 저장</button><button class="hbtn g" onclick="dlCap('svg')">SVG 저장</button><button class="hbtn" onclick="cm('m-cap')">닫기</button></div></div>
 </div>
 <!-- 노드 레이블 수정 모달 -->
@@ -1121,6 +1131,7 @@ let drag=null;
 let connecting=null; // Click-to-connect state
 let reconnecting=null; // Edge endpoint reconnect drag state
 let capSVG='';
+let captureBgMode='auto'; // 'auto' | 'white' | 'black' | 'transparent'
 let globalLineStyle = 'step'; // 기본 선 스타일 꺾은선으로 유지
 let demoTimer = null; // 초기화 시 데모 복원 방지
 const MAX_STEP_BENDS = 4; // 꺾은선 내부 꺾임 최대 개수
@@ -2786,7 +2797,18 @@ function redrawEdges(){Object.keys(edges).forEach(renderEdge);}
 // ══════════════════════════════════════════════════
 function createNode(type,x,y,id,label,props,sw,sh){
   if(!S[type]) return null;
-  const nid=id||'n'+(++nc);
+  let nid=id||'n'+(++nc);
+  // 사용자 편집으로 ID가 미리 점유되었을 수 있으므로 충돌 회피.
+  // nc가 MAX_SAFE_INTEGER에 도달하면 ++nc가 더 이상 증가하지 않아 무한 루프가 되므로,
+  // 안전 정수 범위를 벗어나는 즉시 비결정적 fallback ID 생성기로 전환.
+  while(!id && nodes[nid]){
+    if(!Number.isSafeInteger(nc+1)){
+      do { nid='n'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+      while(nodes[nid]);
+      break;
+    }
+    nid='n'+(++nc);
+  }
   const nodeProps=(props&&typeof props==='object') ? jClone(props) : getDefaultNodeProperties(type);
   nodes[nid]={id:nid,type,label:label!=null?label:S[type].label||type,x,y,properties:nodeProps};
   if(sw) nodes[nid].sw=sw;
@@ -2794,6 +2816,69 @@ function createNode(type,x,y,id,label,props,sw,sh){
   invalidateBboxCache();
   renderNode(nid); updateStatus(); return nid;
 }
+// 노드 ID 변경: 노드/엣지 from·to/DOM id/선택 상태를 모두 새 ID로 동기화
+function renameNodeId(oldId, newId){
+  if(!nodes[oldId]) return {ok:false, msg:'노드를 찾을 수 없습니다.'};
+  if(newId===oldId) return {ok:true};
+  if(nodes[newId]) return {ok:false, msg:'같은 ID의 노드가 이미 있습니다.'};
+  if(!/^[A-Za-z0-9_\-]+$/.test(newId)){
+    return {ok:false, msg:'영문/숫자/_/- 만 사용할 수 있습니다.'};
+  }
+  // 숫자만으로 된 ID("1","123" 등)는 일반 객체에서 배열 인덱스 키로 취급되어
+  // Object.keys 순회 시 문자열 키보다 먼저 열거되는데, 이 앱은 키 순서로 z-order를
+  // 보존하므로 결과적으로 undo/시트 전환/JSON 복원 시 레이어가 어긋난다. 거부.
+  if(/^\d+$/.test(newId)){
+    return {ok:false, msg:'숫자만으로 된 ID는 레이어 순서가 깨질 수 있어 사용할 수 없습니다. (영문이나 _ 를 섞어 주세요)'};
+  }
+
+  // 데이터 이동 — Object.keys 순서가 z-order 역할을 하므로(히스토리·시트·JSON 복원 시
+  // 그 순서대로 다시 그림) delete + 재할당으로 끝에 밀리지 않도록 원래 위치를 유지한 채 재구성
+  const n=nodes[oldId];
+  n.id=newId;
+  const rebuilt={};
+  for(const k of Object.keys(nodes)){
+    if(k===oldId) rebuilt[newId]=n;
+    else rebuilt[k]=nodes[k];
+  }
+  nodes=rebuilt;
+
+  // 새 ID가 자동 생성 패턴(n<숫자>)과 겹치면 카운터를 끌어올려
+  // 이후 createNode/pasteSelection이 같은 번호를 재발급해 덮어쓰지 않게 보장.
+  // MAX_SAFE_INTEGER를 넘으면 ++nc가 멈추거나 지수 표기 ID를 생성해 createNode의
+  // `while(!id && nodes[nid])` 루프가 영원히 끝나지 않을 수 있으므로 안전 정수로 제한.
+  const autoMatch=/^n(\d{1,15})$/.exec(newId);
+  if(autoMatch){
+    const num=parseInt(autoMatch[1],10);
+    if(Number.isSafeInteger(num) && num>nc) nc=num;
+  }
+
+  // 엣지 참조 갱신
+  Object.values(edges).forEach(e=>{
+    if(e.from===oldId) e.from=newId;
+    if(e.to===oldId)   e.to=newId;
+  });
+
+  // 노드 DOM id, 화면에 표시되는 ID 텍스트, 앵커·리사이즈 핸들 dataset 갱신
+  const g=document.getElementById('ng-'+oldId);
+  if(g){
+    g.id='ng-'+newId;
+    const nidTx=g.querySelector('.nid');
+    if(nidTx) nidTx.textContent=newId;
+    g.querySelectorAll('[data-nid]').forEach(el=>{ el.dataset.nid=newId; });
+  }
+
+  // 선택 상태 갱신
+  if(selId===oldId) selId=newId;
+  if(selSet.has(oldId)){ selSet.delete(oldId); selSet.add(newId); }
+
+  // 인스펙터·상태 라벨 갱신
+  invalidateBboxCache();
+  redrawEdges();
+  updateInspector();
+  updateStatus();
+  return {ok:true};
+}
+
 function createEdge(from,to,fromA,toA,id,label,name,cp1dx,cp1dy,cp2dx,cp2dy){
   if(from===to) return null;
   const eid=id||'e'+(++ec);
@@ -2888,8 +2973,9 @@ function autoLayout(dir = 'v') {
     chooseAutoAnchorsForEdge(e, dir);
   });
   
-  redrawEdges(); fitAll();
+  // 좌표가 바뀐 노드 기준으로 새 장애물 캐시를 만들기 위해 redraw 이전에 무효화
   invalidateBboxCache();
+  redrawEdges(); fitAll();
   saveState(dir === 'v' ? '세로 방향 자동 정렬' : '가로 방향 자동 정렬');
 }
 
@@ -3551,17 +3637,19 @@ function pasteSelection(){
   clearSel();
 
   clipBundle.nodes.forEach(src=>{
-    const nid='n'+(++nc);
-    idMap[src.id]=nid;
-    createNode(
+    // 명시적 ID를 넘기면 createNode의 충돌 회피 루프를 우회하므로,
+    // 사용자가 이름 바꾼 노드(n3 등)와 부딪히지 않도록 allocator에 위임
+    const nid=createNode(
       src.type,
       snapG((src.x||0)+dx),
       snapG((src.y||0)+dy),
-      nid,
+      null,
       src.label,
       jClone(src.properties||{}),
       src.sw, src.sh
     );
+    if(!nid) return;
+    idMap[src.id]=nid;
     if(src.color) nodes[nid].color=src.color;
     if(src.txtColor) nodes[nid].txtColor=src.txtColor;
     renderNode(nid);
@@ -3721,7 +3809,7 @@ const n=nodes[selId]; if(!n) return;
   const ph=Object.entries(nodeProps).map(([k,v])=>`
     <div class="pr"><input class="pk" value="${escAttr(k)}" placeholder="키 (예: required_level(레벨))"><input class="pv" value="${escAttr(v)}" placeholder="값/수식 (예: required_level++)"><button class="dx" data-del-key="${escAttr(k)}">✕</button></div>`).join('');
   body.innerHTML=`
-    <div class="fg"><div class="fl">Node ID</div><input class="fi" value="${escAttr(n.id)}" readonly></div>
+    <div class="fg"><div class="fl">Node ID</div><input class="fi" id="nid-edit" value="${escAttr(n.id)}" spellcheck="false" autocomplete="off" placeholder="예: start, n1, login_form"></div>
     <div class="fg"><div class="fl">레이블</div><input class="fi" id="nl" value="${escAttr(n.label||'')}"></div>
     <div class="fsep"></div>
     <div class="phd"><div class="ptt">크기 및 배치</div></div>
@@ -3748,13 +3836,45 @@ const n=nodes[selId]; if(!n) return;
   <div class="fsep"></div>
   <button class="hbtn" id="node-delete" title="노드 삭제">🗑</button>`;
   
+  // 노드 ID 직접 편집
+  // 입력 → 다른 노드 클릭 → change 이벤트 순서로 발화될 때 selId가 이미 다른 노드로
+  // 바뀌어 있을 수 있다. 인스펙터를 렌더링한 시점의 노드 ID를 클로저에 고정해 사용.
+  const editingId=n.id;
+  const nidEdit=document.getElementById('nid-edit');
+  if(nidEdit){
+    nidEdit.addEventListener('change',ev=>{
+      const newId=ev.target.value.trim();
+      // 변경 확정 시점에 그 노드가 여전히 존재하는지 확인
+      if(!nodes[editingId]){ ev.target.value=editingId; return; }
+      if(!newId || newId===editingId){ ev.target.value=editingId; return; }
+      const res=renameNodeId(editingId, newId);
+      if(!res.ok){
+        showAlert(res.msg||'노드 ID 변경 실패');
+        ev.target.value=editingId;
+        return;
+      }
+      saveState('노드 ID 변경');
+    });
+  }
   document.getElementById('nl').addEventListener('change',ev=>{saveState('레이블 텍스트 변경');});
   document.getElementById('nl').addEventListener('input',ev=>{
     n.label=ev.target.value;
     // 레이블만 직접 업데이트 — 전체 renderNode 불필요
     const g=document.getElementById('ng-'+selId);
     const tx=g?.querySelector('.ntx');
-    if(tx) tx.textContent=ev.target.value;
+    if(tx){
+      tx.textContent=ev.target.value;
+    } else if(ev.target.value){
+      // 초기 라벨이 비어 있던 노드(initial/fsmfinal/scdestroy 등)는 .ntx가 없으므로 전체 재렌더가 필요
+      renderNode(selId);
+      // renderNode가 <g>를 새로 만들면서 선택 클래스가 사라지므로 복원
+      // (selItem()을 호출하면 인스펙터가 재렌더되어 입력 포커스를 잃으므로 클래스만 다시 부여)
+      const ng=document.getElementById('ng-'+selId);
+      if(ng){
+        ng.classList.add('sel');
+        if(selSet.has(selId)) ng.classList.add('msel');
+      }
+    }
     ltRequestSync('노드 레이블 편집');
   });
 
@@ -4059,14 +4179,22 @@ function doImp(){
       globalLineStyle=normalizeLineStyle(d.lineStyle);
       applyLineStyleButton(document.getElementById('lstyle-btn'), globalLineStyle, true);
     }
-    // nc/ec 최댓값을 먼저 스캔해 ID 충돌 방지
+    // nc/ec 최댓값을 먼저 스캔해 ID 충돌 방지.
+    // 안전 정수 범위를 넘는 값이 들어오면 이후 ++nc / ++ec가 멈춰 무한 루프가 되므로
+    // safe integer 가드 + 자릿수 제한(15자리 = 999조)으로 차단.
+    const safeMaxInt=(s,cur)=>{
+      const m=/^(\d{1,15})$/.exec(s);
+      if(!m) return cur;
+      const v=parseInt(m[1],10);
+      return Number.isSafeInteger(v) && v>cur ? v : cur;
+    };
     dedupedNodes.forEach(n=>{
       const sid=typeof n?.id==='string' ? n.id : '';
-      nc=Math.max(nc,parseInt(sid.replace(/\D/g,''))||0);
+      nc=safeMaxInt(sid.replace(/\D/g,''), nc);
     });
     dedupedEdges.forEach(e=>{
       const sid=typeof e?.id==='string' ? e.id : '';
-      ec=Math.max(ec,parseInt(sid.replace(/\D/g,''))||0);
+      ec=safeMaxInt(sid.replace(/\D/g,''), ec);
     });
 
     let skippedNodeCount=duplicateNodeIdCount;
@@ -4242,10 +4370,15 @@ function captureFlow(){
   });
 
   // ── SVG 노드/엣지 그룹을 CSS var 해석한 채로 직렬화 ──
-  const cs = getComputedStyle(document.documentElement);
+  // body.light가 :root의 CSS 변수를 덮어쓰므로, 현재 테마가 반영된 body에서 읽어야 한다
+  const cs = getComputedStyle(document.body);
+  const csRoot = getComputedStyle(document.documentElement);
   function rv(val){ // resolve CSS vars
     if(!val) return val;
-    return val.replace(/var\(([^)]+)\)/g,(_,k)=>cs.getPropertyValue(k.trim()).trim()||'#888');
+    return val.replace(/var\(([^)]+)\)/g,(_,k)=>{
+      const key=k.trim();
+      return (cs.getPropertyValue(key).trim() || csRoot.getPropertyValue(key).trim() || '#888');
+    });
   }
 
   function cloneForExport(el){
@@ -4317,8 +4450,27 @@ function captureFlow(){
   // 선택 상태 복원
   if(prevSel&&!prevSel.startsWith('edge:')) document.getElementById('ng-'+prevSel)?.classList.add('sel');
 
-  const bg=lightMode?'#f4f6fa':'#080b10';
-  const edgeCol=lightMode?'rgba(0,0,0,0.82)':'rgba(255,255,255,0.88)';
+  // 배경 모드: 'auto'(테마) | 'white' | 'black' | 'transparent'
+  const bgMode = captureBgMode || 'auto';
+  let bg, edgeCol;
+  if(bgMode==='white'){
+    bg='#ffffff';
+    edgeCol='rgba(0,0,0,0.82)';
+  } else if(bgMode==='black'){
+    bg='#080b10';
+    edgeCol='rgba(255,255,255,0.88)';
+  } else if(bgMode==='transparent'){
+    bg=null; // 배경 사각형/캔버스 fill 생략
+    edgeCol=lightMode?'rgba(0,0,0,0.82)':'rgba(255,255,255,0.88)';
+  } else {
+    bg=lightMode?'#f4f6fa':'#080b10';
+    edgeCol=lightMode?'rgba(0,0,0,0.82)':'rgba(255,255,255,0.88)';
+  }
+  // .elt 텍스트는 cloneForExport에서 현재 테마 색이 inline 속성으로 박힌다.
+  // 강제 배경(white/black)을 라벨 박스에 그대로 칠하면 다크 테마의 밝은 글자가
+  // 흰 박스 위에 올라가는 식의 가독성 붕괴가 생기므로, 라벨 박스는 항상 테마 배경을 유지.
+  const themeBg = lightMode?'#f4f6fa':'#080b10';
+  const labelBoxBg = themeBg;
   const customMarkers = Object.values(edges)
     .filter(e=>e.color)
     .map(e=>`<marker id="marker-ec-${e.id}" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="${e.color}"/></marker>`)
@@ -4336,12 +4488,12 @@ function captureFlow(){
     `.ntype{font-size:8.5px;font-weight:700;letter-spacing:1px;}`,
     `.ep{fill:none;stroke:${edgeCol};stroke-width:1.8;marker-end:url(#ad);}`,
     `.elt{font-family:Arial,monospace;dominant-baseline:middle;text-anchor:middle;}`,
-    `.elb{fill:${bg};stroke:${edgeCol};stroke-width:1;}`,
+    `.elb{fill:${labelBoxBg};stroke:${edgeCol};stroke-width:1;}`,
     `.sc-lifeline{stroke:${edgeCol};stroke-width:1.2;stroke-dasharray:6 4;}`,
     `</style>`,
     `<defs><marker id="ad" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">`,
     `<polygon points="0 0,8 3,0 6" fill="${edgeCol}"/></marker>${customMarkers}</defs>`,
-    `<rect width="${CW}" height="${CH}" fill="${bg}"/>`,
+    bg ? `<rect width="${CW}" height="${CH}" fill="${bg}"/>` : '',
     `<g transform="translate(${-ox},${-oy})">`,
     elStr, lblStr, nlStr,
     `</g></svg>`
@@ -4353,7 +4505,8 @@ function captureFlow(){
   const capCv=document.getElementById('cap-cv');
   capCv.width=CW*scale; capCv.height=CH*scale;
   const ctx=capCv.getContext('2d');
-  ctx.fillStyle=bg; ctx.fillRect(0,0,CW*scale,CH*scale);
+  ctx.clearRect(0,0,CW*scale,CH*scale);
+  if(bg){ ctx.fillStyle=bg; ctx.fillRect(0,0,CW*scale,CH*scale); }
 
   const img=new Image();
   img.onload=()=>{
@@ -4369,6 +4522,20 @@ function captureFlow(){
   document.getElementById('cap-png-btn').disabled=true;
   img.src=encoded;
   document.getElementById('m-cap').style.display='flex';
+  refreshCaptureBgButtons();
+}
+
+function refreshCaptureBgButtons(){
+  document.querySelectorAll('.cap-bg-opt').forEach(b=>{
+    b.classList.toggle('active', b.dataset.bg===captureBgMode);
+  });
+}
+function setCaptureBg(mode){
+  if(!['auto','white','black','transparent'].includes(mode)) return;
+  captureBgMode=mode;
+  refreshCaptureBgButtons();
+  // 노드가 없으면 captureFlow가 얼리 리턴하므로 그냥 호출
+  if(Object.keys(nodes).length) captureFlow();
 }
 
 function downloadBlob(filename, blob){
@@ -4853,8 +5020,10 @@ function matchKey(e, binding){
 
 /* ── 편집 액션 헬퍼 (keydown에서 직접 호출 가능하도록 분리) ── */
 function doSelectAll(){
+  // 기존 단일 선택(노드/엣지)이 남아 있으면 다중 선택 인스펙터가 안 뜨므로 함께 해제
+  selId=null;
   selSet.clear();
-  document.querySelectorAll('.ng.msel').forEach(el=>el.classList.remove('msel'));
+  document.querySelectorAll('.ng.sel,.ng.msel,.eg.sel,.ep.hl').forEach(el=>el.classList.remove('sel','msel','hl'));
   Object.keys(nodes).forEach(id=>{selSet.add(id);document.getElementById('ng-'+id)?.classList.add('msel');});
   document.getElementById('sts').textContent=`${selSet.size}개 선택`;
   updateInspector();
