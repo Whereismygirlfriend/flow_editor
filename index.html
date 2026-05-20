@@ -1233,8 +1233,10 @@ function getNodeFillColorExpr(node, spec){
   const custom=safeHexColor(node?.color,'');
   return custom || `var(${spec.c})`;
 }
-function getNodeStrokeColorExpr(typeColorVar){
-  return `var(${typeColorVar})`;
+// 사용자 지정 내부 색(node.color)이 있으면 테두리도 같은 색을 따라가도록 변경
+function getNodeStrokeColorExpr(node, typeColorVar){
+  const custom=safeHexColor(node?.color,'');
+  return custom || `var(${typeColorVar})`;
 }
 function getNodeAccentColorExpr(typeColorVar){
   return `var(${typeColorVar})`;
@@ -1706,7 +1708,7 @@ function renderNode(id){
 
   const sg=mk('g'); sg.classList.add('nsh'); sg.style.color=getNodeAccentColorExpr(s.t);
   const fillCol=getNodeFillColorExpr(n,s);
-  const strokeCol=getNodeStrokeColorExpr(s.b);
+  const strokeCol=getNodeStrokeColorExpr(n, s.b);
   sg.innerHTML=`<g fill="${fillCol}" stroke="${strokeCol}" stroke-width="1.7">${s.draw(W,H)}</g>`;
   g.appendChild(sg);
 
